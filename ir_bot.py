@@ -6,64 +6,57 @@ import pandas as pd
 from datetime import datetime
 import io
 from openpyxl.styles import PatternFill
-import threading
-import time
-import schedule
-from cryptography.fernet import Fernet  # pip install cryptography
+from cryptography.fernet import Fernet
 import base64
+import atexit
 
-# === BẢO MẬT TOKEN + KEY ===
-TOKEN = os.getenv('BOT_TOKEN')  # Đặt trong Railway Variables
-ENCRYPT_KEY = os.getenv('ENCRYPT_KEY')  # Tạo 1 lần, mình hướng dẫn bên dưới
+# === FIX RENDER/RAILWAY PATH + PERSISTENT DISK ===
+if os.path.exists('/data'):  # Render Disk
+    os.chdir('/data')
+else:
+    os.makedirs('/opt/render/project/src/data', exist_ok=True)
+    os.chdir('/opt/render/project/src/data')
+
+# === TOKEN + KEY ===
+TOKEN = os.getenv('BOT_TOKEN')
+ENCRYPT_KEY = os.getenv('ENCRYPT_KEY')
 if not ENCRYPT_KEY:
-    ENCRYPT_KEY = base64.urlsafe_b64encode(os.urandom(32)).decode()  # Tạo tự động lần đầu
-    print(f"ENCRYPT_KEY mới: {ENCRYPT_KEY} - COPY DÁN VÀO RAILWAY NGAY!")
+    ENCRYPT_KEY = base64.urlsafe_b64encode(os.urandom(32)).decode()
+    print(f"\n=== ENCRYPT_KEY MỚI (COPY DÁN VÀO VARIABLES NGAY): ===\n{ENCRYPT_KEY}\n")
+
 cipher = Fernet(ENCRYPT_KEY.encode())
+bot = telebot.TeleBot(TOKEN)
 
-# Chỉ cho phép user ID này dùng bot (bảo vệ tuyệt đối)
-ALLOWED_USERS = [6796774010]
+# === WHITELIST USER (THAY ID CỦA BẠN) ===
+ALLOWED_USERS = [6796774010]  # ← ID bạn đã đúng
 
-DATA_FILE = 'data.enc'  # Lưu mã hóa
+DATA_FILE = 'data.enc'
 tasks = {}
 user_states = {}
-remind_enabled = {}
 
-# === MÃ HÓA / GIẢI MÃ FILE ===
+# === MÃ HÓA / GIẢI MÃ ===
 def load_encrypted():
     if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, 'rb') as f:
-            encrypted = f.read()
-        decrypted = cipher.decrypt(encrypted)
-        return json.loads(decrypted.decode('utf-8'))
+        try:
+            with open(DATA_FILE, 'rb') as f:
+                data = json.loads(cipher.decrypt(f.read()).decode('utf-8'))
+            return data.get("tasks", {})
+        except:
+            return {}
     return {}
 
 def save_encrypted():
-    data = json.dumps({"tasks": tasks, "remind": remind_enabled}, ensure_ascii=False)
-    encrypted = cipher.encrypt(data.encode('utf-8'))
+    data = json.dumps({"tasks": tasks}, ensure_ascii=False)
     with open(DATA_FILE, 'wb') as f:
-        f.write(encrypted)
+        f.write(cipher.encrypt(data.encode('utf-8')))
 
-# Load dữ liệu
-loaded = load_encrypted()
-tasks = loaded.get("tasks", {})
-remind_enabled = loaded.get("remind", {})
+tasks = load_encrypted()
+atexit.register(save_encrypted)
 
-# === KIỂM TRA QUYỀN TRUY CẬP ===
-def check_access(message):
-    user_id = message.from_user.id
-    if user_id not in ALLOWED_USERS:
-        bot.reply_to(message, "❌ Bạn không có quyền sử dụng bot này!")
-        return False
-    return True
+# === BẢO MẬT ===
+def is_allowed(user_id):
+    return user_id in ALLOWED_USERS
 
-# === TẤT CẢ CÁC HANDLER ĐỀU THÊM CHECK ===
-def protected_handler(func):
-    def wrapper(message):
-        if not check_access(message):
-            return
-        func(message)
-    return wrapper
-# === ÁP DỤNG BẢO MẬT CHO TẤT CẢ LỆNH (SAU KHI BOT ĐÃ TẠO) ===
 def protected(func):
     def wrapper(message):
         if not is_allowed(message.from_user.id):
@@ -72,81 +65,34 @@ def protected(func):
         func(message)
     return wrapper
 
-# Áp dụng bảo mật cho từng lệnh
-@bot.message_handler(commands=['start', 'add', 'list', 'ir', 'done', 'thieu', 'thongke', 'export', 'remind', 'cancel', 'auth'])
-@protected
-def universal_handler(message):
-    pass  # Không cần làm gì, chỉ để decorator chạy
+# === DỮ LIỆU ===
+REQUIRED_FIELDS = ["service_request","response_plan","ir_report","attack_map","list_evidence","up_log","lesson_learned"]
+FIELDS_ORDER = ["irid","khach_hang","nguoi_thuc_hien","created","updated","incident_info"] + REQUIRED_FIELDS + ["status"]
 
-# Làm tương tự cho các lệnh khác: /add, /done, /list, /ir, v.v.
-# (Bạn chỉ cần thêm @protected vào trên mỗi @bot.message_handler)
-# Áp dụng cho mọi lệnh
-#for cmd in ['start', 'add', 'list', 'ir', 'done', 'thieu', 'thongke', 'export', 'remind', 'cancel']:
-    #handler = bot._handlers[0].get(cmd, [None])[0]
-    #if handler:
-        #new_handler = protected_handler(handler.callback)
-        #bot.remove_message_handler(handler)
-        #bot.message_handler(commands=[cmd])(new_handler)
-        
-# === NHẮC NHỞ 8H + AN TOÀN ===
-#def daily_reminder():
-    #for chat_id in tasks.keys():
-        #if not remind_enabled.get(chat_id, True): continue
-        # ... (giữ nguyên nội dung nhắc nhở như trước)
-
-#threading.Thread(target=run_scheduler, daemon=True).start()
-
-# === /AUTH (nếu muốn thêm người dùng sau này) ===
-@bot.message_handler(commands=['auth'])
-def add_user(message):
-    if message.from_user.id != ALLOWED_USERS[0]:  # Chỉ admin thêm
-        return
-    try:
-        new_id = int(message.text.split()[1])
-        if new_id not in ALLOWED_USERS:
-            ALLOWED_USERS.append(new_id)
-            bot.reply_to(message, f"Đã thêm user {new_id} vào danh sách trắng!")
-    except:
-        bot.reply_to(message, "Dùng: /auth 123456789")
-
-# === LƯU KHI THOÁT ===
-import atexit
-atexit.register(save_encrypted)
-
-DATA_FILE = 'ir_tasks.json'
-tasks = {}
-user_states = {}
-
-def load_tasks():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {}
-
-def save_tasks():
-    with open(DATA_FILE, 'w', encoding='utf-8') as f:
-        json.dump(tasks, f, ensure_ascii=False, indent=4)
-
-tasks = load_tasks()
-
-REQUIRED_FIELDS = [
-    "service_request", "response_plan", "ir_report",
-    "attack_map", "list_evidence", "up_log", "lesson_learned"
-]
-
-FIELDS_ORDER = [
-    "irid", "khach_hang", "nguoi_thuc_hien", "created", "updated",
-    "incident_info", "service_request", "response_plan", "ir_report",
-    "attack_map", "list_evidence", "up_log", "lesson_learned", "status"
-]
-
-# === MENU ĐẸP 8 NÚT ===
 def main_keyboard():
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
     markup.add('/add', '/list', '/thieu')
     markup.add('/ir', '/done', '/thongke')
     markup.add('/export', '/cancel')
     return markup
+
+# === /START ===
+@bot.message_handler(commands=['start'])
+@protected
+def start(message):
+    chat_id = str(message.chat.id)
+    tasks.setdefault(chat_id, [])
+    bot.reply_to(message,
+                 "🛡️ *BOT QUẢN LÝ IR - KHÔNG BỎ SÓT 7 MỤC!*\n\n"
+                 "Lệnh:\n"
+                 "/add - Thêm IR mới\n"
+                 "/list - Xem tất cả\n"
+                 "/ir 12345 - Xem chi tiết\n"
+                 "/thieu - IR còn ND\n"
+                 "/done 12345 - Đánh dấu Done\n"
+                 "/thongke - Thống kê\n"
+                 "/export - Excel (ô đỏ = ND)",
+                 parse_mode='Markdown', reply_markup=main_keyboard())
 
 # === /CANCEL ===
 @bot.message_handler(commands=['cancel'])
@@ -155,9 +101,9 @@ def cancel_operation(message):
     user_id = str(message.chat.id)
     if user_id in user_states:
         del user_states[user_id]
-    bot.reply_to(message, "❌ *Đã hủy thao tác!* Quay lại menu chính ✅", parse_mode='Markdown', reply_markup=main_keyboard())
+    bot.reply_to(message, "❌ *Đã hủy thao tác!* Quay lại menu ✅", parse_mode='Markdown', reply_markup=main_keyboard())
 
-# === THÊM IR ===
+# === /ADD ===
 @bot.message_handler(commands=['add'])
 @protected
 def start_add(message):
@@ -169,12 +115,12 @@ def send_prompt(user_id, step):
     field = FIELDS_ORDER[step]
     prompt = f"➕ *Thêm IR mới* [{step+1}/{len(FIELDS_ORDER)}]\n\n📌 Nhập *{field.replace('_', ' ').title()}*:"
     if field in ["created", "updated"]:
-        prompt += "\n(dd/mm/yyyy hoặc n/a cho updated)"
+        prompt += "\n(dd/mm/yyyy hoặc n/a)"
     elif field in REQUIRED_FIELDS:
         prompt += "\n(D = Done ✅ | ND = Not Done ❌)"
     elif field == "status":
         prompt += "\n(backlog | in progress | post incident | done)"
-    prompt += "\n\nGõ /cancel để thoát!"
+    prompt += "\n\n/cancel để thoát"
     bot.send_message(user_id, prompt, parse_mode='Markdown', reply_markup=ForceReply())
 
 @bot.message_handler(func=lambda m: str(m.chat.id) in user_states and user_states[str(m.chat.id)].get('mode') == 'add')
@@ -184,14 +130,12 @@ def handle_add_steps(message):
     if message.text and message.text.strip().lower() == "/cancel":
         cancel_operation(message)
         return
-
     state = user_states[user_id]
     step = state['step']
     field = FIELDS_ORDER[step]
     text = message.text.strip()
     chat_id = user_id
-    if chat_id not in tasks:
-        tasks[chat_id] = []
+    tasks.setdefault(chat_id, [])
 
     if field == "irid":
         if not text.isdigit():
@@ -229,7 +173,7 @@ def handle_add_steps(message):
         send_prompt(user_id, state['step'])
     else:
         tasks[chat_id].append(state['data'])
-        save_tasks()
+        save_encrypted()
         del user_states[user_id]
         ir = state['data']
         missing = [f for f in REQUIRED_FIELDS if ir.get(f) == "❌ Not Done"]
@@ -258,7 +202,6 @@ def find_ir(chat_id, irid):
             return ir
     return None
 
-# === HIỂN THỊ CHI TIẾT IR - ĐẸP Y CHANG BẠN MUỐN ===
 def show_ir_detail(chat_id, ir):
     status_emoji = {"backlog": "🔴", "in progress": "🟡", "post incident": "🟠", "done": "🟢"}.get(ir['status'], "⚪")
     msg = f"🔍 *IR {ir['irid']} - {ir['khach_hang']}*\n"
@@ -276,7 +219,7 @@ def show_ir_detail(chat_id, ir):
 
 # === /IR ===
 @bot.message_handler(commands=['ir'])
-@protected    
+@protected
 def view_ir(message):
     try:
         irid = message.text.split(maxsplit=1)[1]
@@ -327,7 +270,7 @@ def process_done(message):
     if ir and ir.get(field) == "❌ Not Done":
         ir[field] = "✅ Done"
         ir['updated'] = datetime.now().strftime("%d/%m/%Y")
-        save_tasks()
+        save_encrypted()
         bot.reply_to(message, f"✅ Đã đánh dấu *{format_field(field)}* DONE!", parse_mode='Markdown', reply_markup=main_keyboard())
         show_ir_detail(message.chat.id, ir)
     del user_states[user_id]
@@ -411,21 +354,6 @@ def export_excel(message):
                       caption=f"📊 IR Export - {datetime.now().strftime('%d/%m/%Y')}",
                       visible_file_name=f"IR_Report_{datetime.now().strftime('%Y%m%d')}.xlsx")
 
-# === /START ===
-@bot.message_handler(commands=['start'])
-@protected
-    def start(message):
-    bot.reply_to(message,
-                 "🛡️ *BOT QUẢN LÝ IR - KHÔNG BỎ SÓT 7 MỤC!*\n\n"
-                 "Lệnh:\n"
-                 "/add - Thêm IR mới\n"
-                 "/list - Xem tất cả\n"
-                 "/ir 12345 - Xem chi tiết\n"
-                 "/thieu - IR còn ND\n"
-                 "/done 12345 - Đánh dấu Done\n"
-                 "/thongke - Thống kê\n"
-                 "/export - Excel (ô đỏ = ND)",
-                 parse_mode='Markdown', reply_markup=main_keyboard())
-
-print("IR Bot HOÀN CHỈNH 100% - TẤT CẢ BUTTON HOẠT ĐỘNG - 10/11/2025")
-bot.infinity_polling()
+# === CHẠY BOT ===
+print("IR BOT FULL - KHÔNG REMIND - CHẠY 24/7 TRÊN RENDER/RAILWAY - 10/11/2025")
+bot.infinity_polling(skip_pending=True)
