@@ -63,14 +63,30 @@ def protected_handler(func):
             return
         func(message)
     return wrapper
+# === ÁP DỤNG BẢO MẬT CHO TẤT CẢ LỆNH (SAU KHI BOT ĐÃ TẠO) ===
+def protected(func):
+    def wrapper(message):
+        if not is_allowed(message.from_user.id):
+            bot.reply_to(message, "❌ Bạn không có quyền dùng bot này!")
+            return
+        func(message)
+    return wrapper
 
+# Áp dụng bảo mật cho từng lệnh
+@bot.message_handler(commands=['start', 'add', 'list', 'ir', 'done', 'thieu', 'thongke', 'export', 'remind', 'cancel', 'auth'])
+@protected
+def universal_handler(message):
+    pass  # Không cần làm gì, chỉ để decorator chạy
+
+# Làm tương tự cho các lệnh khác: /add, /done, /list, /ir, v.v.
+# (Bạn chỉ cần thêm @protected vào trên mỗi @bot.message_handler)
 # Áp dụng cho mọi lệnh
-for cmd in ['start', 'add', 'list', 'ir', 'done', 'thieu', 'thongke', 'export', 'remind', 'cancel']:
-    handler = bot._handlers[0].get(cmd, [None])[0]
-    if handler:
-        new_handler = protected_handler(handler.callback)
-        bot.remove_message_handler(handler)
-        bot.message_handler(commands=[cmd])(new_handler)
+#for cmd in ['start', 'add', 'list', 'ir', 'done', 'thieu', 'thongke', 'export', 'remind', 'cancel']:
+    #handler = bot._handlers[0].get(cmd, [None])[0]
+    #if handler:
+        #new_handler = protected_handler(handler.callback)
+        #bot.remove_message_handler(handler)
+        #bot.message_handler(commands=[cmd])(new_handler)
         
 # === NHẮC NHỞ 8H + AN TOÀN ===
 #def daily_reminder():
@@ -134,6 +150,7 @@ def main_keyboard():
 
 # === /CANCEL ===
 @bot.message_handler(commands=['cancel'])
+@protected
 def cancel_operation(message):
     user_id = str(message.chat.id)
     if user_id in user_states:
@@ -142,6 +159,7 @@ def cancel_operation(message):
 
 # === THÊM IR ===
 @bot.message_handler(commands=['add'])
+@protected
 def start_add(message):
     user_id = str(message.chat.id)
     user_states[user_id] = {'mode': 'add', 'step': 0, 'data': {}}
@@ -160,6 +178,7 @@ def send_prompt(user_id, step):
     bot.send_message(user_id, prompt, parse_mode='Markdown', reply_markup=ForceReply())
 
 @bot.message_handler(func=lambda m: str(m.chat.id) in user_states and user_states[str(m.chat.id)].get('mode') == 'add')
+@protected
 def handle_add_steps(message):
     user_id = str(message.chat.id)
     if message.text and message.text.strip().lower() == "/cancel":
@@ -257,6 +276,7 @@ def show_ir_detail(chat_id, ir):
 
 # === /IR ===
 @bot.message_handler(commands=['ir'])
+@protected    
 def view_ir(message):
     try:
         irid = message.text.split(maxsplit=1)[1]
@@ -270,6 +290,7 @@ def view_ir(message):
 
 # === /DONE ===
 @bot.message_handler(commands=['done'])
+@protected
 def start_mark_done(message):
     try:
         irid = message.text.split()[1]
@@ -291,6 +312,7 @@ def start_mark_done(message):
         bot.reply_to(message, "Dùng: /done 642")
 
 @bot.message_handler(func=lambda m: str(m.chat.id) in user_states and user_states[str(m.chat.id)].get('mode') == 'done')
+@protected
 def process_done(message):
     if message.text.strip().lower() == "/cancel":
         cancel_operation(message)
@@ -312,6 +334,7 @@ def process_done(message):
 
 # === /LIST ===
 @bot.message_handler(commands=['list'])
+@protected
 def list_all(message):
     ir_list = tasks.get(str(message.chat.id), [])
     if not ir_list:
@@ -327,6 +350,7 @@ def list_all(message):
 
 # === /THIEU ===
 @bot.message_handler(commands=['thieu'])
+@protected
 def ir_thieu(message):
     chat_id = str(message.chat.id)
     incomplete = [ir for ir in tasks.get(chat_id, []) if any(ir.get(f) == "❌ Not Done" for f in REQUIRED_FIELDS)]
@@ -341,6 +365,7 @@ def ir_thieu(message):
 
 # === /THONGKE ===
 @bot.message_handler(commands=['thongke'])
+@protected
 def thongke(message):
     ir_list = tasks.get(str(message.chat.id), [])
     total = len(ir_list)
@@ -361,6 +386,7 @@ def thongke(message):
 
 # === /EXPORT ===
 @bot.message_handler(commands=['export'])
+@protected
 def export_excel(message):
     chat_id = str(message.chat.id)
     ir_list = tasks.get(chat_id, [])
@@ -387,7 +413,8 @@ def export_excel(message):
 
 # === /START ===
 @bot.message_handler(commands=['start'])
-def start(message):
+@protected
+    def start(message):
     bot.reply_to(message,
                  "🛡️ *BOT QUẢN LÝ IR - KHÔNG BỎ SÓT 7 MỤC!*\n\n"
                  "Lệnh:\n"
